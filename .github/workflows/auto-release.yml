@@ -24,7 +24,7 @@ on:
         description: continuous-release/toolkit ref to run
         required: false
         type: string
-        default: v0.1.0
+        default: v0.2.1
       working-directory:
         description: Directory containing the project
         required: false
@@ -118,33 +118,40 @@ jobs:
           chmod +x "$RUNNER_TEMP/buck2"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
-      - name: Plan
+      # The tag is the version lock. Reserving it before build and publish
+      # means a re-run continues the same release instead of bumping again,
+      # and a concurrent run either re-plans from the winning tag or reports
+      # that it was superseded by a later release.
+      - name: Reserve
         id: plan
         working-directory: ${{ inputs.working-directory }}
-        run: node "$GITHUB_WORKSPACE/.toolkit/packages/cli/dist/cli.js" plan --notes-out "$RUNNER_TEMP/release-notes.md"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node "$GITHUB_WORKSPACE/.toolkit/packages/cli/dist/cli.js" reserve --notes-out "$RUNNER_TEMP/release-notes.md" --target "$GITHUB_SHA"
 
       - name: Setup
-        if: inputs.setup-command != ''
+        if: inputs.setup-command != '' && steps.plan.outputs.superseded != 'true'
         working-directory: ${{ inputs.working-directory }}
         run: ${{ inputs.setup-command }}
         env:
           VERSION: ${{ steps.plan.outputs.version }}
 
       - name: Test
-        if: inputs.test-command != ''
+        if: inputs.test-command != '' && steps.plan.outputs.superseded != 'true'
         working-directory: ${{ inputs.working-directory }}
         run: ${{ inputs.test-command }}
         env:
           VERSION: ${{ steps.plan.outputs.version }}
 
       - name: Build
+        if: steps.plan.outputs.superseded != 'true'
         working-directory: ${{ inputs.working-directory }}
         run: ${{ inputs.build-command }}
         env:
           VERSION: ${{ steps.plan.outputs.version }}
 
       - name: Configure npm auth
-        if: inputs.system == 'nx' && inputs.publish-command != ''
+        if: inputs.system == 'nx' && inputs.publish-command != '' && steps.plan.outputs.superseded != 'true'
         working-directory: ${{ inputs.working-directory }}
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
@@ -154,8 +161,12 @@ jobs:
             "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" \
             > "$HOME/.npmrc"
 
+      # Publish is always attempted for a reserved version. Re-runs rely on
+      # the publish command being idempotent (npm returns 409 for a version
+      # that already exists); that is what closes the publish-then-release
+      # window without ever republishing a different build.
       - name: Publish
-        if: inputs.publish-command != '' && steps.plan.outputs.existing != 'true'
+        if: inputs.publish-command != '' && steps.plan.outputs.superseded != 'true'
         working-directory: ${{ inputs.working-directory }}
         env:
           VERSION: ${{ steps.plan.outputs.version }}
@@ -164,6 +175,7 @@ jobs:
         run: ${{ inputs.publish-command }}
 
       - name: Create or update release
+        if: steps.plan.outputs.superseded != 'true'
         working-directory: ${{ inputs.working-directory }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -173,7 +185,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          args=(release --repo "$GITHUB_REPOSITORY" --tag "$TAG" --notes-file "$NOTES")
+          args=(release --repo "$GITHUB_REPOSITORY" --tag "$TAG" --target "$GITHUB_SHA" --notes-file "$NOTES")
 
           if [[ -n "${ARTIFACT_GLOB:-}" ]]; then
             shopt -s globstar nullglob
@@ -188,3 +200,14 @@ jobs:
           fi
 
           node "$GITHUB_WORKSPACE/.toolkit/packages/cli/dist/cli.js" "${args[@]}"
+
+      # A failure before the build completes has no external side effect, so
+      # drop the reserved tag and let the next push reuse the version. A
+      # publish or release failure keeps the tag so a re-run retries it.
+      - name: Drop the reservation
+        if: failure() && steps.plan.outcome == 'success' && steps.plan.outputs.superseded != 'true' && steps.build.outcome != 'success'
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: node "$GITHUB_WORKSPACE/.toolkit/packages/cli/dist/cli.js" unreserve --tag "$TAG" --target "$GITHUB_SHA"
