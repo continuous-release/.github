@@ -1,22 +1,35 @@
 name: auto-release
 
-# Reusable release contract for every repo in the continuous-release org.
+# Reusable continuous-release contract for the continuous-release org.
 #
-# Triggered by a push to main in the caller. It computes the next version from
-# conventional commits since the last v* tag, builds and tests, publishes if a
-# publish command is supplied, then creates (or updates) a GitHub Release with
-# the version tag and artifacts.
+# A push to main derives the next version from conventional commits since the
+# last v* tag, builds and tests, optionally publishes, then creates or updates a
+# GitHub Release with the tag and artifacts. Tags are the source of truth; the
+# workflow never commits a version bump back to main, so it cannot trigger
+# itself. Re-running the same commit updates the existing release instead of
+# creating a new version.
 #
-# The version is never committed back to main. Tags are the source of truth,
-# which keeps this from triggering itself.
+# The versioning, notes, and release logic lives in
+# continuous-release/toolkit. This workflow only supplies the build-system
+# setup and runs the caller's commands.
 
 on:
   workflow_call:
     inputs:
       system:
-        description: Build-system adapter (nx, bazel, nix, buck2)
+        description: Build-system adapter (node, nx, bazel, nix, buck2, none)
         required: true
         type: string
+      toolkit-ref:
+        description: continuous-release/toolkit ref to run
+        required: false
+        type: string
+        default: v0.1.0
+      working-directory:
+        description: Directory containing the project
+        required: false
+        type: string
+        default: .
       setup-command:
         description: Optional shell command run before tests (dependency install)
         required: false
@@ -41,11 +54,6 @@ on:
         required: false
         type: string
         default: ''
-      artifact-name:
-        description: Name of the intermediate artifact
-        required: false
-        type: string
-        default: release-artifacts
       runs-on:
         description: Runner label
         required: false
@@ -59,36 +67,25 @@ permissions:
   attestations: write
 
 jobs:
-  version:
-    name: version
+  release:
+    name: release
     runs-on: ${{ inputs.runs-on }}
-    outputs:
-      version: ${{ steps.next.outputs.version }}
-      tag: ${{ steps.next.outputs.tag }}
-      existing: ${{ steps.next.outputs.existing }}
-      previous_tag: ${{ steps.next.outputs.previous_tag }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          repository: continuous-release/.github
-          ref: main
-          path: .harness
-          persist-credentials: false
-      - name: Compute next version
-        id: next
-        run: node .harness/scripts/next-version.mjs
 
-  build:
-    name: build
-    needs: [version]
-    runs-on: ${{ inputs.runs-on }}
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Check out the release toolkit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          fetch-depth: 0
+          repository: continuous-release/toolkit
+          ref: ${{ inputs.toolkit-ref }}
+          path: .toolkit
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
 
       - name: Setup Nx
         if: inputs.system == 'nx'
@@ -121,25 +118,34 @@ jobs:
           chmod +x "$RUNNER_TEMP/buck2"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
+      - name: Plan
+        id: plan
+        working-directory: ${{ inputs.working-directory }}
+        run: node "$GITHUB_WORKSPACE/.toolkit/packages/cli/dist/cli.js" plan --notes-out "$RUNNER_TEMP/release-notes.md"
+
       - name: Setup
         if: inputs.setup-command != ''
+        working-directory: ${{ inputs.working-directory }}
         run: ${{ inputs.setup-command }}
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          VERSION: ${{ steps.plan.outputs.version }}
 
       - name: Test
         if: inputs.test-command != ''
+        working-directory: ${{ inputs.working-directory }}
         run: ${{ inputs.test-command }}
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          VERSION: ${{ steps.plan.outputs.version }}
 
       - name: Build
+        working-directory: ${{ inputs.working-directory }}
         run: ${{ inputs.build-command }}
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          VERSION: ${{ steps.plan.outputs.version }}
 
       - name: Configure npm auth
         if: inputs.system == 'nx' && inputs.publish-command != ''
+        working-directory: ${{ inputs.working-directory }}
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
         run: |
@@ -149,70 +155,36 @@ jobs:
             > "$HOME/.npmrc"
 
       - name: Publish
-        if: inputs.publish-command != '' && needs.version.outputs.existing != 'true'
+        if: inputs.publish-command != '' && steps.plan.outputs.existing != 'true'
+        working-directory: ${{ inputs.working-directory }}
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          VERSION: ${{ steps.plan.outputs.version }}
           NODE_AUTH_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ github.token }}
         run: ${{ inputs.publish-command }}
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: inputs.artifact-glob != ''
-        with:
-          name: ${{ inputs.artifact-name }}
-          path: ${{ inputs.artifact-glob }}
-          if-no-files-found: error
-          retention-days: 7
-
-  release:
-    name: release
-    needs: [version, build]
-    runs-on: ${{ inputs.runs-on }}
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          fetch-depth: 0
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          repository: continuous-release/.github
-          ref: main
-          path: .harness
-          persist-credentials: false
-
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        if: inputs.artifact-glob != ''
-        with:
-          name: ${{ inputs.artifact-name }}
-          path: dist
-
-      - name: Generate notes
-        env:
-          PREVIOUS_TAG: ${{ needs.version.outputs.previous_tag }}
-          VERSION: ${{ needs.version.outputs.version }}
-        run: node .harness/scripts/release-notes.mjs > "$RUNNER_TEMP/notes.md"
-
       - name: Create or update release
+        working-directory: ${{ inputs.working-directory }}
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.version.outputs.tag }}
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          NOTES: ${{ steps.plan.outputs.notes_path }}
+          ARTIFACT_GLOB: ${{ inputs.artifact-glob }}
         run: |
           set -euo pipefail
-          assets=()
-          if [ -d dist ]; then
-            while IFS= read -r -d '' file; do
-              assets+=("$file")
-            done < <(find dist -type f -print0)
+
+          args=(release --repo "$GITHUB_REPOSITORY" --tag "$TAG" --notes-file "$NOTES")
+
+          if [[ -n "${ARTIFACT_GLOB:-}" ]]; then
+            shopt -s globstar nullglob
+            mapfile -t files < <(compgen -G "$ARTIFACT_GLOB" || true)
+            if [[ ${#files[@]} -eq 0 ]]; then
+              echo "No artifacts matched: $ARTIFACT_GLOB" >&2
+              exit 1
+            fi
+            for file in "${files[@]}"; do
+              args+=(--asset "$file")
+            done
           fi
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
-            if [ "${#assets[@]}" -gt 0 ]; then
-              gh release upload "$TAG" "${assets[@]}" --clobber
-            fi
-          else
-            gh release create "$TAG" \
-              --target "$GITHUB_SHA" \
-              --title "$TAG" \
-              --notes-file "$RUNNER_TEMP/notes.md" \
-              "${assets[@]}"
-          fi
+          node "$GITHUB_WORKSPACE/.toolkit/packages/cli/dist/cli.js" "${args[@]}"
