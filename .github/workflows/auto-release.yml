@@ -24,7 +24,7 @@ on:
         description: continuous-release/toolkit ref to run
         required: false
         type: string
-        default: v0.2.1
+        default: v0.3.0
       working-directory:
         description: Directory containing the project
         required: false
@@ -75,15 +75,28 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check out the release toolkit
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          repository: continuous-release/toolkit
-          ref: ${{ inputs.toolkit-ref }}
-          path: .toolkit
-          persist-credentials: false
+      - name: Install the release toolkit
+        env:
+          TOOLKIT_REF: ${{ inputs.toolkit-ref }}
+        run: |
+          set -euo pipefail
+
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) asset="cr-linux-x86_64" ;;
+            *)
+              echo "No prebuilt cr binary for $(uname -s)-$(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+
+          curl -fsSL -o "$RUNNER_TEMP/cr" \
+            "https://github.com/continuous-release/toolkit/releases/download/${TOOLKIT_REF}/${asset}"
+          chmod +x "$RUNNER_TEMP/cr"
+          "$RUNNER_TEMP/cr" --version
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: inputs.system == 'node' || inputs.system == 'nx'
         with:
           node-version: '22'
 
@@ -127,7 +140,7 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node "$GITHUB_WORKSPACE/.toolkit/packages/cli/dist/cli.js" reserve --notes-out "$RUNNER_TEMP/release-notes.md" --target "$GITHUB_SHA"
+        run: cr reserve --notes-out "$RUNNER_TEMP/release-notes.md" --target "$GITHUB_SHA"
 
       - name: Setup
         if: inputs.setup-command != '' && steps.plan.outputs.superseded != 'true'
@@ -200,7 +213,7 @@ jobs:
             done
           fi
 
-          node "$GITHUB_WORKSPACE/.toolkit/packages/cli/dist/cli.js" "${args[@]}"
+          cr "${args[@]}"
 
       # A failure before the build completes has no external side effect, so
       # drop the reserved tag and let the next push reuse the version. A
@@ -211,4 +224,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           TAG: ${{ steps.plan.outputs.tag }}
-        run: node "$GITHUB_WORKSPACE/.toolkit/packages/cli/dist/cli.js" unreserve --tag "$TAG" --target "$GITHUB_SHA"
+        run: cr unreserve --tag "$TAG" --target "$GITHUB_SHA"
