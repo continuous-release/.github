@@ -11,6 +11,7 @@ hold them to it.
 | Repo | Purpose |
 | --- | --- |
 | [toolkit] | Rust `cr` binary: version derivation, notes, adapters, tag reservation, GitHub Releases |
+| [fake-github] | In-memory GitHub API server used as a test double by the toolkit and harness |
 | [.github] | The shared `auto-release` reusable workflow every repo calls |
 | [harness] | Rust harness: local contract suite plus sharded live GitHub Actions scenarios |
 | [sandbox] | Disposable target the harness resets to its `base` tag |
@@ -21,6 +22,7 @@ hold them to it.
 | [buck2] | Buck2 testbed |
 
 [toolkit]: https://github.com/continuous-release/toolkit
+[fake-github]: https://github.com/continuous-release/fake-github
 [.github]: https://github.com/continuous-release/.github
 [harness]: https://github.com/continuous-release/harness
 [sandbox]: https://github.com/continuous-release/sandbox
