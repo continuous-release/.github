@@ -14,6 +14,7 @@ hold them to it.
 | [.github] | The shared `auto-release` reusable workflow every repo calls |
 | [harness] | Rust harness: local contract suite plus sharded live GitHub Actions scenarios |
 | [sandbox] | Disposable target the harness resets to its `base` tag |
+| [polyglot] | L2 fixture: one contract, Rust + TypeScript + Python artifacts, four adapters (Nx, Bazel, Nix, Buck2) |
 | [nx] | Nx + pnpm testbed |
 | [bazel] | Bazel testbed |
 | [nix] | Nix flakes testbed |
@@ -23,6 +24,7 @@ hold them to it.
 [.github]: https://github.com/continuous-release/.github
 [harness]: https://github.com/continuous-release/harness
 [sandbox]: https://github.com/continuous-release/sandbox
+[polyglot]: https://github.com/continuous-release/polyglot
 [nx]: https://github.com/continuous-release/nx
 [bazel]: https://github.com/continuous-release/bazel
 [nix]: https://github.com/continuous-release/nix
