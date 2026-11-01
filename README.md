@@ -32,12 +32,25 @@ and runs:
 3. **Publish** — always attempted for a reserved version; publish commands
    must be idempotent.
 4. **Release** — create a draft, upload assets, then promote it.
-5. **Drop the reservation** — on a failure before the build completes, remove
+5. **Verify** — check that the release is published and, when artifacts are
+   configured, that it has assets.
+6. **Drop the reservation** — on a failure before the build completes, remove
    the tag so the version can be reused.
 
 If a concurrent run took the same version, `reserve` fetches the winning tag
 and re-plans; if the winning release already contains this commit, it reports
 `superseded` and the rest of the job is skipped.
+
+Outputs:
+
+| Output | Purpose |
+| --- | --- |
+| `version` | The released (or existing) version |
+| `tag` | The released tag |
+| `release_url` | URL of the created or updated release |
+
+Callers can use these in a follow-up job, for example to download the published
+assets, check the checksum, and run the binary.
 
 ## Callers
 

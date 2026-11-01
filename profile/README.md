@@ -12,7 +12,7 @@ hold them to it.
 | --- | --- |
 | [toolkit] | Rust `cr` binary: version derivation, notes, adapters, tag reservation, GitHub Releases |
 | [.github] | The shared `auto-release` reusable workflow every repo calls |
-| [harness] | Live GitHub Actions scenarios against the real workflow |
+| [harness] | Rust harness: local contract suite plus sharded live GitHub Actions scenarios |
 | [sandbox] | Disposable target the harness resets to its `base` tag |
 | [nx] | Nx + pnpm testbed |
 | [bazel] | Bazel testbed |
@@ -52,5 +52,6 @@ affected builds, caching, packaging, and publishing all have to be correct on
 every commit.
 
 The testbeds exist to find out which build systems make that cheap. The
-harness exists so the answer is measured against real GitHub Actions rather
-than a local mock.
+harness runs the same scenarios locally for fast feedback and live against
+real GitHub Actions for fidelity, so the contract is measured rather than
+assumed.
