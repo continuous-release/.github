@@ -15,6 +15,16 @@ name: auto-release
 
 on:
   workflow_call:
+    outputs:
+      version:
+        description: The released (or existing) version
+        value: ${{ jobs.release.outputs.version }}
+      tag:
+        description: The released tag
+        value: ${{ jobs.release.outputs.tag }}
+      release_url:
+        description: URL of the created or updated release
+        value: ${{ jobs.release.outputs.release_url }}
     inputs:
       system:
         description: Build-system adapter (node, nx, bazel, nix, buck2, none)
@@ -70,6 +80,10 @@ jobs:
   release:
     name: release
     runs-on: ${{ inputs.runs-on }}
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      release_url: ${{ steps.release.outputs.release_url }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -189,6 +203,7 @@ jobs:
         run: ${{ inputs.publish-command }}
 
       - name: Create or update release
+        id: release
         if: steps.plan.outputs.superseded != 'true'
         working-directory: ${{ inputs.working-directory }}
         env:
@@ -214,6 +229,29 @@ jobs:
           fi
 
           cr "${args[@]}"
+
+      # The release is not good until it is published and its assets are
+      # visible. This is a cheap automatic check on every release.
+      - name: Verify the release
+        if: steps.plan.outputs.superseded != 'true'
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          ARTIFACT_GLOB: ${{ inputs.artifact-glob }}
+        run: |
+          set -euo pipefail
+
+          cr verify --repo "$GITHUB_REPOSITORY" --tag "$TAG" > /dev/null
+
+          draft="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"
+          test "$draft" = "false"
+
+          if [[ -n "${ARTIFACT_GLOB:-}" ]]; then
+            count="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')"
+            test "$count" -gt 0
+          fi
 
       # A failure before the build completes has no external side effect, so
       # drop the reserved tag and let the next push reuse the version. A
