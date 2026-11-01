@@ -144,6 +144,7 @@ jobs:
           VERSION: ${{ steps.plan.outputs.version }}
 
       - name: Build
+        id: build
         if: steps.plan.outputs.superseded != 'true'
         working-directory: ${{ inputs.working-directory }}
         run: ${{ inputs.build-command }}
